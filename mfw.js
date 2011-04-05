@@ -19,14 +19,14 @@ Drupal.behaviors.fileValidateMultipleAutoAttach = {
     if (settings.mfw && settings.mfw.elements) {
       $.each(settings.mfw.elements, function(selector) {
         var extensions = settings.mfw.elements[selector];
-        $(selector, context).bind('change', {extensions: extensions}, Drupal.file.validateMultipleExtensions);
+        $(selector, context).bind('change', {extensions: extensions}, Drupal.mfw.validateMultipleExtensions);
       });
     }
   },
   detach: function (context, settings) {
     if (settings.mfw && settings.mfw.elements) {
       $.each(settings.mfw.elements, function(selector) {
-        $(selector, context).unbind('change', Drupal.file.validateMultipleExtensions);
+        $(selector, context).unbind('change', Drupal.mfw.validateMultipleExtensions);
       });
     }
   }
@@ -35,7 +35,7 @@ Drupal.behaviors.fileValidateMultipleAutoAttach = {
 /**
  * File upload utility functions.
  */
-Drupal.file = Drupal.file || {
+Drupal.mfw = Drupal.mfw || {
   /**
    * Client-side file input validation of file extensions.
    */
@@ -50,14 +50,14 @@ Drupal.file = Drupal.file || {
       // evaluates to 'false' after the second call.
       var acceptableMatch = new RegExp('\\.(' + extensionPattern + ')$', 'i');
       var i = 0;
-      for (i = 0; i < this.files.length; i++){
+      for (i = 0; i < this.files.length; i++) {
         var fileName = this.files[i].fileName;
         var match = acceptableMatch.test(fileName);
         if (!match) {
           var error = Drupal.t("The selected file %filename cannot be uploaded. Only files with the following extensions are allowed: %extensions.", {
             '%filename': fileName,
             '%extensions': extensionPattern.replace(/\|/g, ', ')
-          });
+          } );
           $(this).parents('div.form-managed-file').prepend('<div class="messages error file-upload-js-error">' + error + '</div>');
           this.value = '';
           return false;
