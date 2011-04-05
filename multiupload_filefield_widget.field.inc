@@ -127,7 +127,7 @@ function multiupload_filefield_widget_field_widget_form(&$form, &$form_state, $f
 function multiupload_filefield_widget_field_widget_settings_form($field, $instance) {
   $form = file_field_widget_settings_form($field, $instance) ;
   $form['#attached']['js'] = array(drupal_get_path('module', 'multiupload_filefield_widget') . '/mfw.js');
-
+  return $form;
 }
 
 /**
