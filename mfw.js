@@ -51,7 +51,7 @@ Drupal.mfw = Drupal.mfw || {
       var acceptableMatch = new RegExp('\\.(' + extensionPattern + ')$', 'i');
       var i = 0;
       for (i = 0; i < this.files.length; i++) {
-        var fileName = this.files[i].fileName;
+        var fileName = this.files[i].name;
         var match = acceptableMatch.test(fileName);
         if (!match) {
           var error = Drupal.t("The selected file %filename cannot be uploaded. Only files with the following extensions are allowed: %extensions.", {
