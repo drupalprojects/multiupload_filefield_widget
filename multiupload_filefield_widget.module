@@ -29,7 +29,7 @@ function multiupload_filefield_widget_element_info() {
     '#extended' => FALSE,
     '#attached' => array(
       'css' => array($file_path . '/file.css'),
-      'js' => array($mfw_path . '/mfw.js', $file_path . '/file.js'),
+      'js' => array($mfw_path . '/mfw.js'), //, $file_path . '/file.js'),
   ),
   );
   return $types;
@@ -45,7 +45,9 @@ function mfw_managed_file_process($element, &$form_state, &$form) {
   $element = file_managed_file_process($element, $form_state, $form);
   $element['upload']['#attributes'] = array('multiple' => 'multiple');
   $element['upload']['#name'] = 'files_' . implode('_', $element['#parents']) . '[]';
-  $element['upload']['#attached']['js'][0]['data']['mfw'] = $element['upload']['#attached']['js'][0]['data']['file'];
+  if (!empty($element['upload']['#attached']['js'][0]['data']['file'])) {
+    $element['upload']['#attached']['js'][0]['data']['mfw'] = $element['upload']['#attached']['js'][0]['data']['file'];
+  }
   unset($element['upload']['#attached']['js'][0]['data']['file']);
   return $element;
 }
