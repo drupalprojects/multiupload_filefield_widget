@@ -29,7 +29,7 @@ function multiupload_filefield_widget_element_info() {
     '#extended' => FALSE,
     '#attached' => array(
       'css' => array($file_path . '/file.css'),
-      'js' => array($mfw_path . '/mfw.js'), //, $file_path . '/file.js'),
+      'js' => array($mfw_path . '/mfw.js', $file_path . '/file.js'),
   ),
   );
   return $types;
