@@ -175,9 +175,9 @@ function mfw_field_widget_process($element, &$form_state, &$form) {
  * wrapper around the entire group so it can be replaced all at once.
  */
 function mfw_field_widget_process_multiple($element, &$form_state, $form) {
-  $upload_name = 'files_' . implode('_', $element['#parents']) . '_' . $element['#file_upload_delta'];
-  if (array_key_exists($upload_name, $_FILES)) {
-    $count = count($_FILES[$upload_name]['name']);
+  $upload_name = implode('_', $element['#parents']) . '_' . $element['#file_upload_delta'];
+  if (isset($_FILES['files']['name']) && array_key_exists($upload_name, $_FILES['files']['name'])) {
+    $count = count($_FILES['files']['name'][$upload_name]);
     //Supposing #file_upload_delta is always the last delta this will work
     for ($i = 1; $i < $count; $i++) {
       $element[] = $element[$element['#file_upload_delta']];
