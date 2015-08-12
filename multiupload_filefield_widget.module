@@ -13,24 +13,27 @@ function multiupload_filefield_widget_element_info() {
   $file_path = drupal_get_path('module', 'file');
   $mfw_path = drupal_get_path('module', 'multiupload_filefield_widget');
 
-  $types['mfw_managed_file'] = array(
-    '#input' => TRUE,
-    '#process' => array('mfw_managed_file_process'),
-    '#value_callback' => 'mfw_managed_file_value',
-    '#element_validate' => array('file_managed_file_validate'),
-    '#pre_render' => array('file_managed_file_pre_render'),
-    '#theme' => 'file_managed_file',
-    '#theme_wrappers' => array('form_element'),
-    '#progress_indicator' => 'throbber',
-    '#progress_message' => NULL,
-    '#upload_validators' => array(),
-    '#upload_location' => NULL,
-    '#extended' => FALSE,
-    '#size' => 22,
-    '#attached' => array(
-      'css' => array($file_path . '/file.css'),
-      'js' => array($mfw_path . '/mfw.js', $file_path . '/file.js'),
-  ),
+  $types = array(
+    'mfw_managed_file' => array(
+      '#input' => TRUE,
+      '#process' => array('mfw_managed_file_process'),
+      '#value_callback' => 'mfw_managed_file_value',
+      '#element_validate' => array('mfw_managed_file_validate'),
+      '#pre_render' => array('mfw_managed_file_pre_render'),
+      '#theme' => 'file_managed_file',
+      '#theme_wrappers' => array('form_element'),
+      '#progress_indicator' => 'throbber',
+      '#progress_message' => NULL,
+      '#upload_validators' => array(),
+      '#upload_location' => NULL,
+      '#multiple' => FALSE,
+      '#extended' => FALSE,
+      '#size' => 22,
+      '#attached' => array(
+        'css' => array($file_path . '/file.css'),
+        'js' => array($mfw_path . '/mfw.js', $file_path . '/file.js'),
+      ),
+    ),
   );
   return $types;
 }
@@ -42,14 +45,166 @@ function multiupload_filefield_widget_element_info() {
  * support for a default value.
  */
 function mfw_managed_file_process($element, &$form_state, &$form) {
-  $element = file_managed_file_process($element, $form_state, $form);
-  $element['upload']['#attributes'] = array('multiple' => 'multiple');
-  $element['upload']['#name'] .= '[]';
-  if (!empty($element['upload']['#attached']['js'][0]['data']['file'])) {
-    $element['upload']['#attached']['js'][0]['data']['mfw'] = $element['upload']['#attached']['js'][0]['data']['file'];
+  // This is used sometimes so let's implode it just once.
+  $parents_prefix = implode('_', $element['#parents']);
+
+  $fids = isset($element['#value']['fids']) ? $element['#value']['fids'] : [];
+
+  // Set some default element properties.
+  $element['#progress_indicator'] = empty($element['#progress_indicator']) ? 'none' : $element['#progress_indicator'];
+  $element['#files'] = !empty($fids) ? file_load_multiple($fids) : FALSE;
+  $element['#tree'] = TRUE;
+
+  // Generate a unique wrapper HTML ID.
+  $ajax_wrapper_id = drupal_html_id('ajax-wrapper');
+
+  $ajax_settings = [
+    'callback' => 'multiupload_filefield_widget_upload_ajax_callback',
+    'wrapper' => $ajax_wrapper_id,
+    'effect' => 'fade',
+    'progress' => [
+      'type' => $element['#progress_indicator'],
+      'message' => $element['#progress_message'],
+    ],
+  ];
+
+  // Set up the buttons first since we need to check if they were clicked.
+  $element['upload_button'] = [
+    '#name' => $parents_prefix . '_upload_button',
+    '#type' => 'submit',
+    '#value' => t('Upload'),
+    '#attributes' => ['class' => ['js-hide']],
+    '#validate' => [],
+    '#submit' => ['mfw_managed_file_file_submit'],
+    '#limit_validation_errors' => [$element['#parents']],
+    '#ajax' => $ajax_settings,
+    '#weight' => -5,
+  ];
+
+  // Force the progress indicator for the remove button to be either 'none' or
+  // 'throbber', even if the upload button is using something else.
+  $ajax_settings['progress']['type'] = ($element['#progress_indicator'] == 'none') ? 'none' : 'throbber';
+  $ajax_settings['progress']['message'] = NULL;
+  $ajax_settings['effect'] = 'none';
+  $element['remove_button'] = [
+    '#name' => $parents_prefix . '_remove_button',
+    '#type' => 'submit',
+    '#value' => $element['#multiple'] ? t('Remove selected') : t('Remove'),
+    '#validate' => [],
+    '#submit' => ['mfw_managed_file_file_submit'],
+    '#limit_validation_errors' => [$element['#parents']],
+    '#ajax' => $ajax_settings,
+    '#weight' => 1,
+  ];
+
+  $element['fids'] = [
+    '#type' => 'hidden',
+    '#value' => $fids,
+  ];
+
+  // Add progress bar support to the upload if possible.
+  if ($element['#progress_indicator'] == 'bar' && $implementation = file_progress_implementation()) {
+    $upload_progress_key = mt_rand();
+
+    if ($implementation == 'uploadprogress') {
+      $element['UPLOAD_IDENTIFIER'] = [
+        '#type' => 'hidden',
+        '#value' => $upload_progress_key,
+        '#attributes' => ['class' => ['file-progress']],
+        // Uploadprogress extension requires this field to be at the top of
+        // the form.
+        '#weight' => -20,
+      ];
+    }
+    elseif ($implementation == 'apc') {
+      $element['APC_UPLOAD_PROGRESS'] = [
+        '#type' => 'hidden',
+        '#value' => $upload_progress_key,
+        '#attributes' => ['class' => ['file-progress']],
+        // Uploadprogress extension requires this field to be at the top of
+        // the form.
+        '#weight' => -20,
+      ];
+    }
+
+    // Add the upload progress callback.
+    $element['upload_button']['#ajax']['progress']['url'] = 'file/progress/' . $upload_progress_key;
   }
-  unset($element['upload']['#attached']['js'][0]['data']['file']);
+
+  // The file upload field itself.
+  $element['upload'] = [
+    '#name' => 'files[' . $parents_prefix . ']',
+    '#type' => 'file',
+    '#title' => t('Choose a file'),
+    '#title_display' => 'invisible',
+    '#size' => $element['#size'],
+    '#multiple' => $element['#multiple'],
+    '#theme_wrappers' => [],
+    '#weight' => -10,
+    '#error_no_message' => TRUE,
+  ];
+
+  if (!empty($fids) && $element['#files']) {
+    foreach ($element['#files'] as $delta => $file) {
+      $file_link = [
+        '#theme' => 'file_link',
+        '#file' => $file,
+      ];
+      if ($element['#multiple']) {
+        $element['file_' . $delta]['selected'] = [
+          '#type' => 'checkbox',
+          '#title' => drupal_render($file_link),
+        ];
+      }
+      else {
+        $element['file_' . $delta]['filename'] = $file_link + ['#weight' => -10];
+      }
+    }
+  }
+
+  // Add the extension list to the page as JavaScript settings.
+  if (isset($element['#upload_validators']['file_validate_extensions'][0])) {
+    $extension_list = implode(',', array_filter(explode(' ', $element['#upload_validators']['file_validate_extensions'][0])));
+    $element['upload']['#attached']['drupalSettings']['file']['elements']['#' . $element['#id']] = $extension_list;
+  }
+
+  // Let #id point to the file element, so the field label's 'for' corresponds
+  // with it.
+  $element['#id'] = &$element['upload']['#id'];
+
+  // Prefix and suffix used for Ajax replacement.
+  $element['#prefix'] = '<div id="' . $ajax_wrapper_id . '">';
+  $element['#suffix'] = '</div>';
+
   return $element;
+}
+
+/**
+ * #ajax callback for managed_file upload forms.
+ *
+ * This ajax callback takes care of the following things:
+ *   - Ensures that broken requests due to too big files are caught.
+ *   - Adds a class to the response to be able to highlight in the UI, that a
+ *     new file got uploaded.
+ */
+function multiupload_filefield_widget_upload_ajax_callback(&$form, &$form_state) {
+  $form_parents = explode('/', $_GET['element_parents']);
+
+  // Retrieve the element to be rendered.
+  $form = drupal_array_get_nested_value($form, $form_parents);
+
+  // Add the special AJAX class if a new file was added.
+  $current_file_count = $form_state['storage']['file_upload_delta_initial'];
+  if (isset($form['#file_upload_delta']) && $current_file_count < $form['#file_upload_delta']) {
+    $form[$current_file_count]['#attributes']['class'][] = 'ajax-new-content';
+  }
+  // Otherwise just add the new content class on a placeholder.
+  else {
+    $form['#suffix'] .= '<span class="ajax-new-content"></span>';
+  }
+
+  $form['#prefix'] .= theme('status_messages');
+  return $form;
 }
 
 /**
@@ -58,31 +213,25 @@ function mfw_managed_file_process($element, &$form_state, &$form) {
  * Mostly copied from file.module.
  */
 function mfw_managed_file_value(&$element, $input = FALSE, $form_state = NULL) {
-  $fid = 0;
-
-  // Find the current value of this field from the form state.
-  $form_state_fid = $form_state['values'];
-  foreach ($element['#parents'] as $parent) {
-    $form_state_fid = isset($form_state_fid[$parent]) ? $form_state_fid[$parent] : 0;
-  }
-
-  if ($element['#extended'] && isset($form_state_fid['fid'])) {
-    $fid = $form_state_fid['fid'];
-  }
-  elseif (is_numeric($form_state_fid)) {
-    $fid = $form_state_fid;
+  // Find the current value of this field.
+  $fids = !empty($input['fids']) ? explode(' ', $input['fids']) : [];
+  foreach ($fids as $key => $fid) {
+    $fids[$key] = (int) $fid;
   }
 
   // Process any input and save new uploads.
   if ($input !== FALSE) {
+    $input['fids'] = $fids;
     $return = $input;
 
-    $element_parent = drupal_array_get_nested_value($form_state['complete form'], array_slice($element['#parents'],0,-1));
-    $element['#file_upload_delta_original'] = isset($element_parent['#file_upload_delta'])? $element_parent['#file_upload_delta'] : 0;
-
     // Uploads take priority over all other values.
-    if ($file = mfw_managed_file_save_upload($element)) {
-      $fid = $file->fid;
+    if ($files = mfw_managed_file_save_upload($element, $form_state)) {
+      if ($element['#multiple']) {
+        $fids = array_merge($fids, array_keys($files));
+      }
+      else {
+        $fids = array_keys($files);
+      }
     }
     else {
       // Check for #filefield_value_callback values.
@@ -94,9 +243,15 @@ function mfw_managed_file_value(&$element, $input = FALSE, $form_state = NULL) {
           $callback($element, $input, $form_state);
         }
       }
-      // Load file if the FID has changed to confirm it exists.
-      if (isset($input['fid']) && $file = file_load($input['fid'])) {
-        $fid = $file->fid;
+
+      // Load files if the FIDs have changed to confirm they exist.
+      if (!empty($input['fids'])) {
+        $fids = [];
+        foreach ($input['fids'] as $fid) {
+          if ($file = File::load($fid)) {
+            $fids[] = $file->id();
+          }
+        }
       }
     }
   }
@@ -104,22 +259,26 @@ function mfw_managed_file_value(&$element, $input = FALSE, $form_state = NULL) {
   // If there is no input, set the default value.
   else {
     if ($element['#extended']) {
-      $default_fid = isset($element['#default_value']['fid']) ? $element['#default_value']['fid'] : 0;
-      $return = isset($element['#default_value']) ? $element['#default_value'] : array('fid' => 0);
+      $default_fids = isset($element['#default_value']['fids']) ? $element['#default_value']['fids'] : [];
+      $return = isset($element['#default_value']) ? $element['#default_value'] : ['fids' => []];
     }
     else {
-      $default_fid = isset($element['#default_value']) ? $element['#default_value'] : 0;
-      $return = array('fid' => 0);
+      $default_fids = isset($element['#default_value']) ? $element['#default_value'] : [];
+      $return = ['fids' => []];
     }
 
     // Confirm that the file exists when used as a default value.
-    if ($default_fid && $file = file_load($default_fid)) {
-      $fid = $file->fid;
+    if (!empty($default_fids)) {
+      $fids = [];
+      foreach ($default_fids as $fid) {
+        if ($file = File::load($fid)) {
+          $fids[] = $file->id();
+        }
+      }
     }
   }
 
-  $return['fid'] = $fid;
-
+  $return['fids'] = $fids;
   return $return;
 }
 
@@ -134,36 +293,38 @@ function mfw_managed_file_value(&$element, $input = FALSE, $form_state = NULL) {
  *   The file object representing the file that was saved, or FALSE if no file
  *   was saved.
  */
-function mfw_managed_file_save_upload($element) {
-  $last_parent = array_pop($element['#parents']);
-  $upload_name = implode('_', $element['#parents']) . '_' . $element['#file_upload_delta_original'];
-  array_push($element['#parents'], $last_parent);
-
-  $file_number = $last_parent - $element['#file_upload_delta_original'];
-
-  if (isset($_FILES['files']['name'][$upload_name][$file_number])) {
-    $name = $_FILES['files']['name'][$upload_name][$file_number];
-    if (empty($name)) {
-      return FALSE;
-    }
-
-    $destination = isset($element['#upload_location']) ? $element['#upload_location'] : NULL;
-    if (isset($destination) && !file_prepare_directory($destination, FILE_CREATE_DIRECTORY)) {
-      watchdog('file', 'The upload directory %directory for the file field !name could not be created or is not accessible. A newly uploaded file could not be saved in this directory as a consequence, and the upload was canceled.', array('%directory' => $destination, '!name' => $element['#field_name']));
-      form_set_error($upload_name, t('The file could not be uploaded.'));
-      return FALSE;
-    }
-
-    if (!$file = mfw_file_save_upload($upload_name, $file_number, $element['#upload_validators'], $destination)) {
-      watchdog('file', 'The file upload failed. %upload', array('%upload' => $upload_name));
-      form_set_error($upload_name, t('The file in the !name field was unable to be uploaded.', array('!name' => $element['#title'])));
-      return FALSE;
-    }
-    return $file;
-  }
-  else {
+function mfw_managed_file_save_upload(&$element, &$form_state) {
+  $upload_name = implode('_', $element['#parents']);
+  $file_upload = $_FILES['files']['name'][$upload_name];
+  if (empty($file_upload)) {
     return FALSE;
   }
+
+  $destination = isset($element['#upload_location']) ? $element['#upload_location'] : NULL;
+  if (isset($destination) && !file_prepare_directory($destination, FILE_CREATE_DIRECTORY)) {
+    watchdog('file', 'The upload directory %directory for the file field !name could not be created or is not accessible. A newly uploaded file could not be saved in this directory as a consequence, and the upload was canceled.', array('%directory' => $destination, '!name' => $element['#field_name']), 'notice');
+    form_error($element, t('The file could not be uploaded.'));
+    return FALSE;
+  }
+
+  // Save attached files to the database.
+  $files_uploaded = $element['#multiple'] && count(array_filter($file_upload)) > 0;
+  $files_uploaded |= !$element['#multiple'] && !empty($file_upload);
+  if ($files_uploaded) {
+    if (!$files = file_save_upload($upload_name, $element['#upload_validators'], $destination)) {
+      watchdog('file', 'The file upload failed. %upload', array('%upload' => $upload_name), 'notice');
+      form_error($element, t('Files in the !name field were unable to be uploaded.', array('!name' => $element['#title'])));
+      return array();
+    }
+
+    // Value callback expects FIDs to be keys.
+    $files = array_filter($files);
+    $fids = array_map(function($file) { return $file->fid; }, $files);
+
+    return empty($files) ? array() : array_combine($fids, $files);
+  }
+
+  return array();
 }
 
 
@@ -381,6 +542,118 @@ function mfw_file_save_upload($source, $file_number, $validators = array(), $des
   return FALSE;
 }
 
+function mfw_managed_file_pre_render($element) {
+  // If we already have a file, we don't want to show the upload controls.
+  if (!empty($element['#value']['fids'])) {
+    if (!$element['#multiple']) {
+      $element['upload']['#access'] = FALSE;
+      $element['upload_button']['#access'] = FALSE;
+    }
+  }
+  // If we don't already have a file, there is nothing to remove.
+  else {
+    $element['remove_button']['#access'] = FALSE;
+  }
+  return $element;
+}
+
+function mfw_managed_file_validate(&$element, &$form_state, &$form) {
+  // If referencing an existing file, only allow if there are existing
+  // references. This prevents unmanaged files from being deleted if this
+  // item were to be deleted.
+  $clicked_button = end($form_state['triggering_element']['#parents']);
+  if ($clicked_button != 'remove_button' && !empty($element['fids']['#value'])) {
+    $fids = $element['fids']['#value'];
+    foreach ($fids as $fid) {
+      if ($file = file_load($fid)) {
+        if ($file->status == FILE_STATUS_PERMANENT) {
+          $references = file_usage_list($file);
+          if (empty($references)) {
+            form_error($element, t('The file used in the !name field may not be referenced.', ['!name' => $element['#title']]));
+          }
+        }
+      }
+      else {
+        form_error($element, t('The file referenced by the !name field does not exist.', ['!name' => $element['#title']]));
+      }
+    }
+  }
+
+  // Check required property based on the FID.
+  if ($element['#required'] && empty($element['fids']['#value']) && !in_array($clicked_button, ['upload_button', 'remove_button'])) {
+    form_error($element, t('!name is required.', ['!name' => $element['#title']]));
+  }
+
+  // Consolidate the array value of this field to array of FIDs.
+  if (!$element['#extended']) {
+    form_set_value($element, $element['fids']['#value'], $form_state);
+  }
+}
+
+/**
+ * Form submission handler for upload / remove buttons of managed_file elements.
+ */
+function mfw_managed_file_file_submit($form, &$form_state) {
+  // Determine whether it was the upload or the remove button that was clicked,
+  // and set $element to the managed_file element that contains that button.
+  $parents = $form_state['triggering_element']['#array_parents'];
+  $button_key = array_pop($parents);
+  $element = drupal_array_get_nested_value($form, $parents);
+
+  // No action is needed here for the upload button, because all file uploads on
+  // the form are processed by mfw_managed_file_value()
+  // regardless of which button was clicked. Action is needed here for the
+  // remove button, because we only remove a file in response to its remove
+  // button being clicked.
+  if ($button_key == 'remove_button') {
+    $fids = array_keys($element['#files']);
+    // Get files that will be removed.
+    if ($element['#multiple']) {
+      $remove_fids = array();
+      foreach (element_children($element) as $name) {
+        if (strpos($name, 'file_') === 0 && $element[$name]['selected']['#value']) {
+          $remove_fids[] = (int) substr($name, 5);
+        }
+      }
+      $fids = array_diff($fids, $remove_fids);
+    }
+    else {
+      // If we deal with single upload element remove the file and set
+      // element's value to empty array (file could not be removed from
+      // element if we don't do that).
+      $remove_fids = $fids;
+      $fids = array();
+    }
+
+    foreach ($remove_fids as $fid) {
+      // If it's a temporary file we can safely remove it immediately, otherwise
+      // it's up to the implementing module to remove usages of files to have them
+      // removed.
+      if ($element['#files'][$fid] && $element['#files'][$fid]->status != FILE_STATUS_PERMANENT) {
+        $element['#files'][$fid]->delete();
+      }
+    }
+    // Update both $form_state['values'] and $form_state['input'] to reflect
+    // that the file has been removed, so that the form is rebuilt correctly.
+    // $form_state['values'] must be updated in case additional submit
+    // handlers run, and for form building functions that run during the
+    // rebuild, such as when the managed_file element is part of a field widget.
+    // $form_state['input'] must be updated so that mfw_managed_file_value()
+    //  has correct information during the rebuild.
+    form_set_value($element['fids'], implode(' ', $fids), $form_state);
+    drupal_array_set_nested_value($form_state['input'], $element['fids']['#parents'], implode(' ', $fids));
+  }
+
+  // Set the form to rebuild so that $form is correctly updated in response to
+  // processing the file removal. Since this function did not change $form_state
+  // if the upload button was clicked, a rebuild isn't necessary in that
+  // situation and setting $form_state['no_redirect] to TRUE would suffice.
+  // However, we choose to always rebuild, to keep the form processing workflow
+  // consistent between the two buttons.
+  $form_state->rebuild = TRUE;
+}
+
+
 /**
  * Implements hook_insert_widgets().
  */
@@ -396,3 +669,146 @@ function multiupload_filefield_widget_insert_widgets() {
   );
 }
 
+/**
+ * Implements hook_theme().
+ */
+function multiupload_filefield_widget_theme() {
+  return array(
+    'multiupload_filefield_widget' => array(
+      'render element' => 'element',
+    ),
+    'multiupload_filefield_widget_multiple' => array(
+      'render element' => 'element',
+    ),
+  );
+}
+
+/**
+ * Returns HTML for a group of file upload widgets.
+ *
+ * @param $variables
+ *   An associative array containing:
+ *   - element: A render element representing the widgets.
+ *
+ * @ingroup themeable
+ */
+function theme_multiupload_filefield_widget_multiple($variables) {
+  $element = $variables['element'];
+
+  // Special ID and classes for draggable tables.
+  $weight_class = $element['#id'] . '-weight';
+  $table_id = $element['#id'] . '-table';
+
+  // Build up a table of applicable fields.
+  $headers = array();
+  $headers[] = t('File information');
+  if ($element['#display_field']) {
+    $headers[] = array(
+      'data' => t('Display'),
+      'class' => array('checkbox'),
+    );
+  }
+  $headers[] = t('Weight');
+  $headers[] = t('Operations');
+
+  // Get our list of widgets in order (needed when the form comes back after
+  // preview or failed validation).
+  $widgets = array();
+  foreach (element_children($element) as $key) {
+    $widgets[] = &$element[$key];
+  }
+  usort($widgets, '_field_sort_items_value_helper');
+
+  $rows = array();
+  foreach ($widgets as $key => &$widget) {
+    // Save the uploading row for last.
+    if ($widget['#files'] == FALSE) {
+      $widget['#title'] = $element['#file_upload_title'];
+      $widget['#description'] = $element['#file_upload_description'];
+      continue;
+    }
+
+    // Delay rendering of the buttons, so that they can be rendered later in the
+    // "operations" column.
+    $operations_elements = array();
+    foreach (element_children($widget) as $sub_key) {
+      if (isset($widget[$sub_key]['#type']) && $widget[$sub_key]['#type'] == 'submit') {
+        hide($widget[$sub_key]);
+        $operations_elements[] = &$widget[$sub_key];
+      }
+    }
+
+    // Delay rendering of the "Display" option and the weight selector, so that
+    // each can be rendered later in its own column.
+    if ($element['#display_field']) {
+      hide($widget['display']);
+    }
+    hide($widget['_weight']);
+
+    // Render everything else together in a column, without the normal wrappers.
+    $widget['#theme_wrappers'] = array();
+    $information = drupal_render($widget);
+
+    // Render the previously hidden elements, using render() instead of
+    // drupal_render(), to undo the earlier hide().
+    $operations = '';
+    foreach ($operations_elements as $operation_element) {
+      $operations .= render($operation_element);
+    }
+    $display = '';
+    if ($element['#display_field']) {
+      unset($widget['display']['#title']);
+      $display = array(
+        'data' => render($widget['display']),
+        'class' => array('checkbox'),
+      );
+    }
+    $widget['_weight']['#attributes']['class'] = array($weight_class);
+    $weight = render($widget['_weight']);
+
+    // Arrange the row with all of the rendered columns.
+    $row = array();
+    $row[] = $information;
+    if ($element['#display_field']) {
+      $row[] = $display;
+    }
+    $row[] = $weight;
+    $row[] = $operations;
+    $rows[] = array(
+      'data' => $row,
+      'class' => isset($widget['#attributes']['class']) ? array_merge($widget['#attributes']['class'], array('draggable')) : array('draggable'),
+    );
+  }
+
+  drupal_add_tabledrag($table_id, 'order', 'sibling', $weight_class);
+
+  $output = '';
+  $output = empty($rows) ? '' : theme('table', array('header' => $headers, 'rows' => $rows, 'attributes' => array('id' => $table_id)));
+  $output .= drupal_render_children($element);
+  return $output;
+}
+
+/**
+ * Returns HTML for an individual file upload widget.
+ *
+ * @param $variables
+ *   An associative array containing:
+ *   - element: A render element representing the widget.
+ *
+ * @ingroup themeable
+ */
+function theme_multiupload_filefield_widget($variables) {
+  $element = $variables['element'];
+  $output = '';
+
+  // The "form-managed-file" class is required for proper Ajax functionality.
+  $output .= '<div class="file-widget form-managed-file clearfix">';
+  if (!empty($element['fids']['#value'])) {
+    // Add the file size after the file name.
+    $element['filename']['#markup'] .= ' <span class="file-size">(' . format_size($element['#files']->filesize) . ')</span> ';
+  }
+  $output .= drupal_render_children($element);
+  $output .= '</div>';
+
+  return $output;
+}
